@@ -2,8 +2,8 @@ use database snowhouse_import;
 use warehouse snowhouse;
 use schema prod;
 
-desc view snowscience.staging.clustering_state;
 
+---------------------------------------------------- Part 1: Experimenting
 select file_selection_state, clustering_levels, clustering_levels_pre_selection, table_id, event_timestamp, * from snowscience.staging.clustering_state
 -- where timestamp >= dateadd('day', -1, current_timestamp());
 where timestamp between '2025-05-12' and '2025-05-20'
@@ -14,12 +14,8 @@ limit 10;
 -- has table_id
 -- eg: 727343003370866
 
-
--- checking which deployments are in prod
-select * from job_etl_v where deployment = 'va3' and created_on > '2025-05-20' limit 5;
-
-desc view snowscience.staging.clustering_jobs;
-desc view snowscience.staging.clustering_state;
+-- desc view snowscience.staging.clustering_jobs;
+-- desc view snowscience.staging.clustering_state;
 
 
 -- this table is the same as snowscience.staging.clustering_state: shows file selections
@@ -49,7 +45,6 @@ select
        created_on > '2025-05-22'
     limit 10;
 
-
 -- snowscience.staging.clustering_jobs : info on all clustering levels, combined
 -- snowscience.staging.clustering_state : separate clustering levels
 
@@ -69,12 +64,11 @@ set tableid = 2052791698834;
 -- set tableid = 739344320151370;
 
 --------------------------------------------------------------------
---                       Official Analysis
+--                       Part 2: The Actual Analysis
 --------------------------------------------------------------------
 
 set start_date = '2025-05-12 00:00:00';
 set end_date = '2025-05-13 00:00:00';
--- set end_date = '2025-05-12 01:00:00';
 
 -- create schema temp.abright;
 
@@ -92,7 +86,7 @@ create or replace table temp.abright.job_etl_v_filtered as (
         description like '%clustering_service_select_files%'
 );
 
-select count(*) from temp.abright.job_etl_v_filtered; -- 9779300
+-- select count(*) from temp.abright.job_etl_v_filtered; -- 9779300
 
 create or replace table temp.abright.cs_filtered as (
     select target_file_level - 1 as level,
@@ -121,8 +115,8 @@ create or replace table temp.abright.cs_filtered as (
     where timestamp between $start_date and $end_date
 ); 
 
-select count(*) from temp.abright.cs_filtered; -- 1937050
-select * from temp.abright.cs_filtered limit 10;
+-- select count(*) from temp.abright.cs_filtered; -- 1937050
+-- select * from temp.abright.cs_filtered limit 10;
 
 
 create or replace table temp.abright.fs_all2 as (
@@ -137,13 +131,13 @@ create or replace table temp.abright.fs_all2 as (
 
 
 -- checks
-select count(*) from job_etl_v where description like '%clustering_service_select_files%' and created_on between $start_date and $end_date; -- 9779308
-select count(*) from temp.abright.fs_all2; -- 7851423
-select count(*) from temp.abright.fs_all where batches_selected; -- 1920855
+-- select count(*) from job_etl_v where description like '%clustering_service_select_files%' and created_on between $start_date and $end_date; -- 9779308
+-- select count(*) from temp.abright.fs_all2; -- 7851423
+-- select count(*) from temp.abright.fs_all where batches_selected; -- 1920855
 
 
 -- treat timestamp as file selection finish, created_on as file selection start
-select timestamp, created_on, timestampdiff('MILLISECONDS', timestamp, created_on) a from temp.abright.fs_all where a > 0 limit 100;
+-- select timestamp, created_on, timestampdiff('MILLISECONDS', timestamp, created_on) a from temp.abright.fs_all where a > 0 limit 100;
 
 -- get file selections, indexed by timestamp per table
 create or replace table temp.abright.fs_indexed2 as (
@@ -160,10 +154,10 @@ create or replace table temp.abright.fs_indexed2 as (
 
 
 
-select count(*) from temp.abright.fs_indexed2; -- 7851432
+-- select count(*) from temp.abright.fs_indexed2; -- 7851432
 
-select * from temp.abright.fs_indexed  where table_id = 377985935286 order by i limit 200;
-select count(*), table_id from temp.abright.fs_indexed group by table_id order by count(*) desc limit 10;
+-- select * from temp.abright.fs_indexed  where table_id = 377985935286 order by i limit 200;
+-- select count(*), table_id from temp.abright.fs_indexed group by table_id order by count(*) desc limit 10;
 
 -- get clustering execution jobs
 -- relavant columns: created_on, end_time
@@ -261,6 +255,8 @@ select d_time_tier, count(*) from
         end as d_time_tier
     from temp.abright.d_fs
     -- where table_id = 1350672726311426   -- a table with a lot of ingestion
+    -- and table_id in (select * from temp.abright.freq_table_ids)
+
 )
 group by d_time_tier;
 
@@ -286,6 +282,8 @@ select d_time_tier, count(*) from
         end as d_time_tier
     from temp.abright.d_fs
     where prev_unsaturation_fraction > 0.5
+    -- and table_id in (select * from temp.abright.freq_table_ids)
+
 )
 group by d_time_tier;
 -------------------------------------------------- graph 3: unsaturated max_times when d_time is low
@@ -322,15 +320,13 @@ where prev_unsaturation_fraction > 0.5
 and d_time < 5000
 and table_id in (select * from temp.abright.freq_table_ids)
 and max_time is not null;
--------------------------------------------------- find mean prev_d_avg_depth among frequently FS'ed tables
-select avg(prev_d_avg_depth)
-from temp.abright.d_fs
-where table_id in (select * from temp.abright.freq_table_ids);
+-------------------------------------------------- find depth reduction stats prev_d_avg_depth
+select avg(d_avg_depth/prev_avg_depth)
+from temp.abright.fs_indexed2
+where prev_avg_depth > 0  -- only one entry violates this; it seems like an anomaly as the target_file_level is incorrect
+-- where table_id in (select * from temp.abright.freq_table_ids)
 
-select * from temp.abright.d_fs
-where max_time is null
-limit 10;
-
+;
 
 
 -- collect some stats
@@ -351,28 +347,28 @@ limit 10;
 
 
 
--- look at file selections for a single table, in chronological order
-with indexed as (
-    select
-       -- *, parse_json(cs.clustering_state):target_file_level as target_level
-       ROW_NUMBER() OVER (ORDER BY timestamp) as i, timestamp, clustering_state, clustering_levels_pre_selection, clustering_levels, target_file_level
-    from snowscience.staging.clustering_state as cs
-    where true 
-        and timestamp > '2025-05-18' -- TODO: change timestamp range
-        and table_id = $tableid -- TODO: change table(s)?
-        and target_file_level = 1
-        order by timestamp)
+-- look at file selections for a single table, in chronological order (outdated)
+-- with indexed as (
+--     select
+--        -- *, parse_json(cs.clustering_state):target_file_level as target_level
+--        ROW_NUMBER() OVER (ORDER BY timestamp) as i, timestamp, clustering_state, clustering_levels_pre_selection, clustering_levels, target_file_level
+--     from snowscience.staging.clustering_state as cs
+--     where true 
+--         and timestamp > '2025-05-18' -- TODO: change timestamp range
+--         and table_id = $tableid -- TODO: change table(s)?
+--         and target_file_level = 1
+--         order by timestamp)
 
-select a.timestamp, 
-        -- a.clustering_levels, a.clustering_levels_pre_selection,
-        parse_json(a.clustering_levels):"0":numFiles files_post,
-        parse_json(a.clustering_levels_pre_selection):"0":numFiles files_pre,
-        parse_json(prev.clustering_levels):"0":numFiles prev_files_post,
-        parse_json(prev.clustering_levels_pre_selection):"0":numFiles prev_files_pre,
-        files_pre - prev_files_post as ingested,
-        timestampdiff("SECOND", prev.timestamp, a.timestamp) as d_time,
-        a.target_file_level, a.clustering_levels, a.clustering_levels_pre_selection, *
-from indexed a join indexed prev on a.i = prev.i + 1;
+-- select a.timestamp, 
+--         -- a.clustering_levels, a.clustering_levels_pre_selection,
+--         parse_json(a.clustering_levels):"0":numFiles files_post,
+--         parse_json(a.clustering_levels_pre_selection):"0":numFiles files_pre,
+--         parse_json(prev.clustering_levels):"0":numFiles prev_files_post,
+--         parse_json(prev.clustering_levels_pre_selection):"0":numFiles prev_files_pre,
+--         files_pre - prev_files_post as ingested,
+--         timestampdiff("SECOND", prev.timestamp, a.timestamp) as d_time,
+--         a.target_file_level, a.clustering_levels, a.clustering_levels_pre_selection, *
+-- from indexed a join indexed prev on a.i = prev.i + 1;
 
 
 -- look at past query results
