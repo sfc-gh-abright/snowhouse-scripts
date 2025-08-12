@@ -1,9 +1,19 @@
 use database snowhouse_import;
 use warehouse snowhouse;
-use schema prod;
+use schema preprod;
+
+select * from snowhouse_import.temptest001030.gs_logs_v
+where timestamp between $start_date and $end_date
+order by timestamp;
 
 
----------------------------------------------------- Part 1: Experimenting
+set start_date = '2025-08-07 12:00:00';
+set end_date = '2025-08-08 00:00:00';
+
+
+
+
+---------------------------------------------------- Part 1: Experimenting - mostly ad hoc queries -----------
 select file_selection_state, clustering_levels, clustering_levels_pre_selection, table_id, event_timestamp, * from snowscience.staging.clustering_state
 -- where timestamp >= dateadd('day', -1, current_timestamp());
 where timestamp between '2025-05-12' and '2025-05-20'
@@ -26,8 +36,8 @@ where timestamp >= '2025-05-20'
 limit 10;
 
 select * from Clustering_information_history_v 
-where timestamp >= '2025-05-20' 
-limit 10;
+where timestamp >= '2025-06-1' 
+limit 100;
 
 
 -- this table shows actual clustering jobs
@@ -239,6 +249,18 @@ create or replace table temp.abright.freq_table_ids as (
     limit 300
 );
 
+
+-- find 600 tables with the most file registrations (from non-clustering jobs)
+create or replace table temp.abright.freq_table_ids2 as (
+    -- select table_id from temp.abright.file_events_s 
+    select table_id from temp.abright.file_events_non_clustering_s 
+    where event_type = 'FILE_REGISTRATION'
+    group by table_id
+    order by count(*) desc
+limit 600);
+
+select * from temp.abright.file_events_s  limit 10;
+
 -------------------------------------------------- graph 1: d_time distribution
 select d_time_tier, count(*) from
 (
@@ -276,7 +298,7 @@ select d_time_tier, count(*) from
     from temp.abright.d_fs
     where prev_unsaturation_fraction > 0.5
     -- where prev_saturated = false
-    and table_id in (select * from temp.abright.freq_table_ids)
+    and table_id in (select * from temp.abright.freq_table_ids2)
 
 )
 group by d_time_tier;
@@ -304,7 +326,7 @@ select max_time_tier, count(*) from
     from temp.abright.d_fs
     where prev_unsaturation_fraction > 0.5
     and d_time < 5000
-    and table_id in (select * from temp.abright.freq_table_ids)
+    and table_id in (select * from temp.abright.freq_table_ids2)
 )
 group by max_time_tier;
 -------------------------------------------------- graph 4: unsaturated clustering durations when d_time is low
@@ -331,7 +353,7 @@ select duration_tier, count(*) from
     from temp.abright.d_fs
     where prev_unsaturation_fraction > 0.5
     and d_time < 5000
-    and table_id in (select * from temp.abright.freq_table_ids)
+    and table_id in (select * from temp.abright.freq_table_ids2)
 )
 group by duration_tier;
 
@@ -340,26 +362,73 @@ select avg(max_time) /1000
 from temp.abright.d_fs
 where prev_unsaturation_fraction > 0.5
 and d_time < 5000
-and table_id in (select * from temp.abright.freq_table_ids)
+and table_id in (select * from temp.abright.freq_table_ids2)
+-- and prev_duration_ms < 1000 * 60 * 30    -- remove outliers
 ;
 -------------------------------------------------- find depth reduction stats prev_d_avg_depth
-select avg(d_avg_depth)
+select avg(avg_depth)
 from temp.abright.fs_indexed2
-where table_id in (select * from temp.abright.freq_table_ids)
+where table_id in (select * from temp.abright.freq_table_ids2)
 ;
 
 select avg(d_avg_depth/prev_avg_depth)
 from temp.abright.fs_indexed2
 where prev_avg_depth > 0  -- only one entry violates this; it seems like an anomaly as the target_file_level is incorrect
-and table_id in (select * from temp.abright.freq_table_ids)
+and table_id in (select * from temp.abright.freq_table_ids2)
 ;
+
+create or replace table temp.abright.clustering_history as (
+    select parse_json(clusteringinformation):average_depth as avg_depth, *
+    from Clustering_information_history_v 
+    where timestamp between $start_date and $end_date
+);
+
+
+create or replace table temp.abright.clustering_history_grouped as (
+    select table_id, avg(avg_depth) as avg_depth, count(*) as cnt 
+    from temp.abright.clustering_history
+    group by table_id
+);
+
+select count(distinct(table_id)) from temp.abright.clustering_history;
+
+-- bucket avg_depth
+select avg_depth_tier, count(*) from
+(
+    select case
+        when avg_depth < 1 then 'c. 1'
+        when avg_depth < 2 then 'd. 2'
+        when avg_depth < 3 then 'e. 3'
+        when avg_depth < 5 then 'f. 5'
+        when avg_depth < 10 then 'g. 10'
+        when avg_depth < 50 then 'h. 50'
+        when avg_depth < 100 then 'i. 100'
+        when avg_depth < 200 then 'j. 200'
+        when avg_depth < 500 then 'k. 500'
+        when avg_depth < 1000 then 'l. 1000'
+        when avg_depth is null then 'z. null'
+        else 'o. > 1000'
+        end as avg_depth_tier
+    from temp.abright.clustering_history_grouped
+    -- from temp.abright.clustering_history
+    -- where table_id in (select * from temp.abright.freq_table_ids2)
+)
+group by avg_depth_tier order by avg_depth_tier;
+
+
+select avg(avg_depth)
+from temp.abright.clustering_history_grouped
+-- where table_id in (select * from temp.abright.freq_table_ids2)
+; 
+
 ------------------------------------------------------    count total FS's and unsaturated FS diffs
 select count(*) from temp.abright.fs_indexed2
-where table_id in (select * from temp.abright.freq_table_ids)
+where table_id in (select * from temp.abright.freq_table_ids2)
 ;
+
 select count(*) from temp.abright.d_fs2
 where prev_unsaturation_fraction > 0.5
-and table_id in (select * from temp.abright.freq_table_ids)
+and table_id in (select * from temp.abright.freq_table_ids2)
 ;
 ------------------------------------------------------    find time til cluster
 create or replace table temp.abright.file_events as (
@@ -371,6 +440,21 @@ create or replace table temp.abright.file_events as (
     and a.account_id in (4,477) // files unregistered by bg jobs have account_id = SNOWFLAKE
     and b.account_id = 477
     and statement_properties = 14336 // 14337 for defrag, 14336 for clustering
+    and a.timestamp between $start_date and $end_date
+    and b.created_on between $start_date and $end_date
+    and event_type in ('FILE_REGISTRATION','FILE_UNREGISTRATION')
+);
+
+
+create or replace table temp.abright.file_events_non_clustering as (
+    select a.*
+    from event_logging_v a join job_etl_v b
+    on a.job_uuid = b.uuid
+    where true
+    and error_code is null
+    and a.account_id in (4,477) // files unregistered by bg jobs have account_id = SNOWFLAKE
+    and b.account_id = 477
+    and statement_properties <> 14336
     and a.timestamp between $start_date and $end_date
     and b.created_on between $start_date and $end_date
     and event_type in ('FILE_REGISTRATION','FILE_UNREGISTRATION')
@@ -394,6 +478,14 @@ create or replace table temp.abright.file_events_s as (
     from temp.abright.file_events
 );
 
+-- parse the registered timestamps
+create or replace table temp.abright.file_events_non_clustering_s as (
+    select 
+        to_timestamp(temp.abright.base36_to_int(split_part(event:fileId, '_', 0))) as registered, 
+        event:tableId as table_id, *
+    from temp.abright.file_events_non_clustering
+);
+
 select time_to_cluster_tier, count(*) from (
     select timestampdiff('MILLISECONDS', registered, timestamp) as time_to_cluster,
         case
@@ -411,13 +503,17 @@ select time_to_cluster_tier, count(*) from (
             when time_to_cluster < 1200000 then 'l. [600, 1200)'
             when time_to_cluster < 1800000 then 'm. [1200, 1800)'
             when time_to_cluster < 3600000 then 'm. [1800, 3600)'
+            when time_to_cluster < 3600000 * 2 then 'n. 2h'
+            when time_to_cluster < 3600000 * 5 then 'o. 5h'
+            when time_to_cluster < 3600000 * 12 then 'p. 12h'
+            when time_to_cluster < 3600000 * 24 then 'q. 24h'
             when time_to_cluster is null then 'z. null'
-            else 'o. > 1h'
+            else 'r. > 24h'
             end as time_to_cluster_tier
     from temp.abright.file_events_s 
     where event_type = 'FILE_UNREGISTRATION'
-    -- and registered < dateadd('hour', -0.1, $start_date)
-    -- and table_id in (select * from temp.abright.freq_table_ids)
+    and parse_json(event):level = 0   -- level 0 files only
+    and table_id in (select * from temp.abright.freq_table_ids2)
 )
 group by time_to_cluster_tier;
 
@@ -447,18 +543,19 @@ select time_to_cluster_tier, count(*) from (
 group by time_to_cluster_tier;
 
 
-select avg(time_to_cluster) from (
+select avg(time_to_cluster)/1000 from (
     select timestampdiff('MILLISECONDS', registered, timestamp) as time_to_cluster,
     from temp.abright.file_events_s 
     where event_type = 'FILE_UNREGISTRATION'
-    and table_id in (select * from temp.abright.freq_table_ids)
+    and parse_json(event):level = 0   -- level 0 files only
+    and table_id in (select * from temp.abright.freq_table_ids2)
 )
 ;
 
 
 
 
-------------------------------------------------------  MISCELLANEOUS
+------------------------------------------------------  MISCELLANEOUS -- more ad hoc queries ---------
 -- collect some stats
 -- select * from 
 -- (select count(*) from d_fs) a, (select count(*) from d_fs where d_fs.prev_saturated = true) b
@@ -506,7 +603,7 @@ SELECT * FROM TABLE(RESULT_SCAN('01bc8b65-0810-2dfc-0001-dd4b7ad83ee7'));
 
 
 -- debugging
-select * from temp.abright.fs_indexed where duration_ms > 60 * 60 * 1000;
+select * from temp.abright.fs_indexed where parse_json(file_selection_state):depthGrowing = true  limit 10;
 
 
 select created_on c2, * from temp.abright.d_fs where 
@@ -592,3 +689,15 @@ select * from temp.abright.ce where timestampdiff('minutes', created_on, end_tim
 
 -- dur_txn_lock, dur_gs_postexecuting are the execution waiting for lock
 -- the first job in the above query takes 4 hours to complete; most of it is spent on dur_txn_lock
+
+select * from gs_snowhouse_view_def.properties limit 10;
+
+select count(*) from temp.abright.fs_indexed
+where max_selected_batch_size >= 512 * 1024 * 1024 limit 10;
+;
+
+select * from temp.abright.file_events_s limit 10;
+
+select * from temp.abright.clustering_history where table_id = 12261233987693066 order by timestamp limit 10;
+
+select * from temp.abright.ce limit 10;
