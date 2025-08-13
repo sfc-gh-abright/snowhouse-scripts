@@ -1,0 +1,121 @@
+
+use database test_db;
+
+set long_string = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
+create or replace procedure do_big_inserts_old()
+returns varchar
+language sql
+as
+$$
+begin
+insert into told 
+select uniform(0,10000,random()), current_date + uniform(0,1000,random()), uniform(20000,50000,random()), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+from table(generator(rowcount=>10000));
+insert into told
+select uniform(0,10000,random()), current_date + uniform(0,1000,random()), uniform(20000,50000,random()), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+from table(generator(rowcount=>50000));
+insert into told
+select uniform(0,10000,random()), current_date + uniform(0,1000,random()), uniform(20000,50000,random()), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+from table(generator(rowcount=>10000));
+insert into told
+select uniform(0,10000,random()), current_date + uniform(0,1000,random()), uniform(20000,50000,random()), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+from table(generator(rowcount=>50000));
+insert into told
+select uniform(0,10000,random()), current_date + uniform(0,1000,random()), uniform(20000,50000,random()), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+from table(generator(rowcount=>10000));
+insert into told
+select uniform(0,10000,random()), current_date + uniform(0,1000,random()), uniform(20000,50000,random()), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+from table(generator(rowcount=>10000));
+insert into told 
+select uniform(0,10000,random()), current_date + uniform(0,1000,random()), uniform(20000,50000,random()), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+from table(generator(rowcount=>10000));
+insert into told 
+select uniform(0,10000,random()), current_date + uniform(0,1000,random()), uniform(20000,50000,random()), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+from table(generator(rowcount=>10000));
+insert into told 
+select uniform(0,10000,random()), current_date + uniform(0,1000,random()), uniform(20000,50000,random()), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+from table(generator(rowcount=>100));
+insert into told 
+select uniform(0,10000,random()), current_date + uniform(0,1000,random()), uniform(20000,50000,random()), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+from table(generator(rowcount=>10000));
+insert into told 
+select uniform(0,10000,random()), current_date + uniform(0,1000,random()), uniform(20000,50000,random()), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+from table(generator(rowcount=>100));
+insert into told 
+select uniform(0,10000,random()), current_date + uniform(0,1000,random()), uniform(20000,50000,random()), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+from table(generator(rowcount=>100000));
+insert into told 
+select uniform(0,10000,random()), current_date + uniform(0,1000,random()), uniform(20000,50000,random()), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+from table(generator(rowcount=>1000000));
+end;
+$$
+;
+
+//setup tables
+create or replace table t(c1 number, c2 date, c3 number, c4 varchar) cluster by (c1);
+create or replace table told(c1 number, c2 date, c3 number, c4 varchar(130)) cluster by (c1);
+
+// get table IDs
+select parse_json(system$dict_id('table', 'told')):tableId;
+set tableid = 282633;
+
+//alter table t set enable_storage_optimization_manager = true, parameter_comment = "adawawdwdawdawdawdawd";
+//alter table t set enable_minor_file_selections = true, parameter_comment = "adawawdwdawdawdawdawd";
+alter table told set clustering_service_trigger_gc_pcnt_threshold = 1.0, parameter_comment = "adawawdwdawdawdawdawd";
+alter table told set BATCHWISE2_MINIMUM_BATCHSIZE = 0, parameter_comment = "adawawdwdawdawdawdawd";
+alter table told set fdn_file_size = 16384, parameter_comment = "reducefilesizeformoreclustering";
+
+
+
+alter account set COMPUTE_SERVICE_WAREHOUSE_CLUSTERING_EXECUTION_POOL = "0", parameter_comment = "setpooledwarehouseszero";
+
+
+////run tasks
+select system$clustering_service_select_files('t', false);
+select system$trigger_manager(4, $tableid, 1);
+select system$storage_optimization_service_select_files(4, $tableid, 1, true, false, 123456);
+
+insert into t values(0, current_date, 0, 'abc'); 
+
+
+
+//alter table t set ENABLE_STORAGE_OPTIMIZATION_TASK_SCHEDULING = true,  parameter_comment = "adawawdwdawdawdawdawd";
+
+-- count FDN files
+select count(*) as total from table(system_table_scan('system$table_fdn_files', 't'))
+where $1:unregisterDmlStartTime = 0;
+// 9160
+//TODO look at level info
+select SYSTEM$CLUSTERING_LEVELS('t');
+
+-- get table hash
+select hash_agg(*) from t;
+
+// more big inserts
+call do_big_inserts_old();
+//call do_small_inserts();
+
+select count(*) from t;
+select count(*) from t2;
+select count(*) from told;
+select count(*) from t3;
+
+//create or replace task spam_task schedule='10 seconds' warehouse='XSMALL' as call do_small_inserts();
+create or replace task spam_task_big_old schedule='10 seconds' warehouse='XSMALL' as call do_big_inserts_old();
+
+create table t3 as (select * from t);
+
+alter task spam_task_big_old resume;
+alter task spam_task_big_old suspend;
+
+delete from t;
+delete from told;
+//LAST FULL CLEAR: 2025-08-11 22:51:43.607 +0000
+//TIME CHANGED TO 10s: 2025-08-12 00:03:00.144 +0000
+// NEW INSERTS (LONG AAA STRING): started 2025-08-12 19:46:13.212 +0000
+select current_timestamp;
+show tasks;
+select * from t limit 1;
+
+
