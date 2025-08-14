@@ -117,5 +117,29 @@ alter task spam_task_big resume;
 alter task spam_task_big suspend;
 show tasks;
 
+create or replace table depths(d varchar, t timestamp);
+create or replace table depths2(d varchar, t timestamp);
 
+create or replace procedure get_depth()
+returns number
+language sql
+as
+$$
+begin
+insert into depths select SYSTEM$CLUSTERING_INFORMATION_INTERNAL('t'), current_timestamp;
+insert into depths2 select SYSTEM$CLUSTERING_INFORMATION_INTERNAL('told'), current_timestamp;
+end;
+$$
+;
+
+call get_depth();
+
+create or replace task submit_depths schedule='1 minutes' warehouse='XSMALL' as call get_depth();
+alter task submit_depths resume;
+alter task submit_depths suspend;
+select * from depths;
+select * from depths2;
+
+select parse_json(d):max_overlaps from depths2 order by t;
+select avg(parse_json(d):max_overlaps) from depths2 order by t;
 
